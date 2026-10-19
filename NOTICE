@@ -1,0 +1,29 @@
+supernote-cli
+Copyright 2026 the supernote-cli authors
+
+This product is a TypeScript port of supernote-cloud
+(https://github.com/rnbennett/supernote-cloud), maintained by Ryan Bennett,
+which is a continuation of sncloud (https://github.com/julianprester/sncloud),
+original work Copyright Julian Prester. Both are licensed under the
+Apache License, Version 2.0.
+
+Files ported from supernote-cloud carry a header naming the file they came
+from. Changes made in the port:
+
+- Rewritten from Python to TypeScript, with no runtime dependencies.
+- Read-only: only login, listing, walking and downloading are ported. The
+  commands that change Supernote Cloud (mkdir, put, rename, mv, cp, rm) are
+  left out.
+- The access token is read from the SUPERNOTE_TOKEN environment variable and
+  is never written to disk. `login` prints the token instead of saving it.
+- File and folder ids are kept as strings, because they exceed the largest
+  integer JavaScript numbers hold exactly.
+- Folder listing follows every page instead of returning only the first 100
+  items.
+- Paths are resolved by matching each part by name, instead of guessing from
+  a "." whether the last part is a file.
+- Identity verification is signalled with an IdentityVerificationRequired
+  error instead of an "__E1760__:<timestamp>" message string, and an expired
+  or invalid token raises AccessTokenRejected.
+
+This project is not affiliated with or endorsed by Ratta or Supernote.

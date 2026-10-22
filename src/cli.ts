@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Ported to TypeScript from rnbennett/supernote-cloud (supernote_cloud/cli.py),
 // Apache-2.0, original work © Julian Prester. Modified by the supernote-cli authors:
-// read-only commands, token read from SUPERNOTE_TOKEN, nothing written to disk
-// except downloads. See NOTICE.
+// token read from SUPERNOTE_TOKEN, nothing written to disk except downloads,
+// Unix-style targets, and guards against overwriting or deleting by accident. See NOTICE.
 
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -21,6 +21,13 @@ Commands:
   walk [path]                   List every folder below path, recursively
   get <path> [-o dir] [--pdf | --png] [--pages 1,2]
                                 Download a file, or render a .note as PDF/PNG
+  put <file>... <folder> [--force]
+                                Upload local files; --force replaces files of the same name
+  mkdir <path> [-p]             Create a folder; -p also creates missing parents
+  rename <path> <new-name>      Rename a file or folder in place
+  mv <path>... <folder>         Move files and folders into a folder
+  cp <path>... <folder>         Copy files and folders into a folder
+  rm <path>... [-r] [-y]        Delete; -r for folders with contents, -y to skip the prompt
 
 Every command except login reads the access token from ${TOKEN_ENV}.
 
@@ -153,7 +160,96 @@ async function get(args: string[]): Promise<void> {
   }
 }
 
-const commands: Record<string, (args: string[]) => Promise<void>> = { login, ls, walk, get };
+/** Split "<source>... <target>" positionals, needing at least one source. */
+function sourcesAndTarget(command: string, positionals: string[], example: string): [string[], string] {
+  if (positionals.length < 2) throw new UsageError(`${command} needs at least one source and a target, e.g. ${example}`);
+  return [positionals.slice(0, -1), positionals.at(-1)!];
+}
+
+async function put(args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { force: { type: "boolean" } } });
+  const [files, folder] = sourcesAndTarget("put", positionals, "supernote put ./a.pdf /Document");
+  for (const name of await clientFromEnv().put(files, folder, { force: values.force })) {
+    process.stdout.write(`Uploaded ${name} to ${folder}\n`);
+  }
+}
+
+async function mkdir(args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { parents: { type: "boolean", short: "p" } },
+  });
+  const path = positionals[0];
+  if (!path || positionals.length > 1) throw new UsageError("mkdir needs one folder path, e.g. supernote mkdir /Document/2026");
+  await clientFromEnv().mkdir(path, { parents: values.parents });
+  process.stdout.write(`Created ${path}\n`);
+}
+
+async function rename(args: string[]): Promise<void> {
+  const { positionals } = parseArgs({ args, allowPositionals: true });
+  const [path, newName] = positionals;
+  if (!path || !newName || positionals.length > 2) {
+    throw new UsageError("rename needs a path and a new name, e.g. supernote rename /Note/a.note b.note");
+  }
+  await clientFromEnv().rename(path, newName);
+  process.stdout.write(`Renamed ${path} to ${newName}\n`);
+}
+
+async function mv(args: string[]): Promise<void> {
+  const { positionals } = parseArgs({ args, allowPositionals: true });
+  const [paths, folder] = sourcesAndTarget("mv", positionals, "supernote mv /Note/a.note /Note/Archive");
+  await clientFromEnv().mv(paths, folder);
+  for (const path of paths) process.stdout.write(`Moved ${path} to ${folder}\n`);
+}
+
+async function cp(args: string[]): Promise<void> {
+  const { positionals } = parseArgs({ args, allowPositionals: true });
+  const [paths, folder] = sourcesAndTarget("cp", positionals, "supernote cp /Note/a.note /Note/Archive");
+  await clientFromEnv().cp(paths, folder);
+  for (const path of paths) process.stdout.write(`Copied ${path} to ${folder}\n`);
+}
+
+/** Deletion cannot be undone from here: ask on a terminal, demand --yes everywhere else. */
+async function rm(args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { recursive: { type: "boolean", short: "r" }, yes: { type: "boolean", short: "y" } },
+  });
+  if (positionals.length === 0) throw new UsageError("rm needs at least one path, e.g. supernote rm /Note/a.note");
+  const client = clientFromEnv();
+  if (!values.yes) {
+    if (!process.stdin.isTTY) throw new UsageError("rm needs --yes when not run from a terminal");
+    const prompter = createPrompter();
+    try {
+      process.stderr.write(`About to delete${values.recursive ? " (folders with their contents)" : ""}:\n`);
+      for (const path of positionals) process.stderr.write(`  ${path}\n`);
+      const answer = await prompter.ask("Delete? [y/N] ");
+      if (!/^y(es)?$/i.test(answer)) {
+        process.stderr.write("Nothing deleted.\n");
+        return;
+      }
+    } finally {
+      prompter.close();
+    }
+  }
+  await client.rm(positionals, { recursive: values.recursive });
+  for (const path of positionals) process.stdout.write(`Deleted ${path}\n`);
+}
+
+const commands: Record<string, (args: string[]) => Promise<void>> = {
+  login,
+  ls,
+  walk,
+  get,
+  put,
+  mkdir,
+  rename,
+  mv,
+  cp,
+  rm,
+};
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;

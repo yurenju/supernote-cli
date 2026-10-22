@@ -1,15 +1,16 @@
 # supernote-cli
 
-An unofficial, **read-only** command-line tool and TypeScript client for
+An unofficial command-line tool and TypeScript client for
 [Supernote Cloud](https://cloud.supernote.com). List your folders, walk the
-whole tree, and download files, or have the cloud render a `.note` notebook as
-PDF or PNG.
+whole tree, download files or have the cloud render a `.note` notebook as PDF
+or PNG, and upload, move, copy, rename or delete files.
 
 > [!WARNING]
 > Supernote Cloud has no public API. This tool uses an undocumented API that
 > other people worked out by watching the Supernote web app, so it can break
 > whenever Supernote changes its servers. It is not affiliated with or endorsed
-> by Ratta or Supernote.
+> by Ratta or Supernote. Commands that change your cloud use the same
+> undocumented API, so try them on a test folder first.
 
 ## Credits
 
@@ -118,6 +119,13 @@ supernote ls [path] [--json]            List a folder (default: root)
 supernote walk [path]                   List every folder below path, recursively
 supernote get <path> [-o dir] [--pdf | --png] [--pages 1,2]
                                         Download a file, or render a .note as PDF/PNG
+supernote put <file>... <folder> [--force]
+                                        Upload local files into a folder
+supernote mkdir <path> [-p]             Create a folder
+supernote rename <path> <new-name>      Rename a file or folder in place
+supernote mv <path>... <folder>         Move files and folders into a folder
+supernote cp <path>... <folder>         Copy files and folders into a folder
+supernote rm <path>... [-r] [-y]        Delete files and folders
 ```
 
 Paths start from the cloud root, for example `/Note/Inbox/meeting.note`.
@@ -133,6 +141,32 @@ supernote get /Note/Inbox/meeting.note --png          # meeting.note_1.png, meet
 `--pdf` and `--png` ask Supernote Cloud to render the notebook, so you don't
 need to parse `.note` files yourself.
 
+```bash
+supernote put ./paper.pdf ./book.epub /Document
+supernote put ./paper.pdf /Document --force   # replace /Document/paper.pdf
+supernote mkdir -p /Document/2026/Q4
+supernote rename /Note/Inbox/meeting.note standup.note
+supernote mv /Note/Inbox/standup.note /Note/Archive
+supernote cp /Note/Archive /Document
+supernote rm /Note/Archive/old.note
+supernote rm -r --yes /Document/Archive
+```
+
+The commands that change your cloud refuse rather than guess:
+
+- Nothing is overwritten. `put`, `mkdir`, `rename`, `mv` and `cp` stop with
+  an error when the target name is taken, before changing anything. Only
+  `put --force` replaces a file: it renames the old one aside, uploads the new
+  one, then deletes the old one, or renames it back if the upload fails. It
+  never replaces a folder.
+- The target of `put`, `mv` and `cp` is always the last argument and must be
+  an existing folder; to change a name, use `rename`.
+- `put` uploads files only, not local folders. Supernote Cloud accepts any
+  file type, but your device opens only the types it supports.
+- `rm` lists what it is about to delete and asks first. Run from a script or
+  agent, with no terminal, it deletes only with `--yes`. A folder that still
+  has contents needs `-r`.
+
 ## Library
 
 ```ts
@@ -145,6 +179,7 @@ for await (const { path, files } of client.walk("/Note")) {
 }
 
 await client.getPdf("/Note/Inbox/meeting.note", "./downloads");
+await client.put(["./paper.pdf"], "/Document", { force: true });
 ```
 
 Each item carries `md5` and `updateTime`, which is enough to download only what
@@ -161,6 +196,15 @@ npm run build     # compiles src/ to dist/
 
 Node runs the TypeScript sources directly during development; `dist/` is only
 for the installed `supernote` command.
+
+To try a change against the real Supernote Cloud, put a token for a test
+account in `.env.local` (it is gitignored) and run the sources with it. The
+tool itself never reads this file; Node loads it into `SUPERNOTE_TOKEN`, so it
+is a development convenience, not a place to keep your real token:
+
+```bash
+node --env-file=.env.local src/cli.ts ls /
+```
 
 ## License
 

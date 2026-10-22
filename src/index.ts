@@ -4,7 +4,9 @@ export {
   AccessTokenRejected,
   ApiError,
   AuthenticationError,
+  FileFolderExists,
   FileFolderNotFound,
+  FolderNotEmpty,
   IdentityVerificationRequired,
 } from "./errors.ts";
 export { extractRealKey, hashPassword, md5, sha256 } from "./hash.ts";

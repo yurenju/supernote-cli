@@ -5,6 +5,8 @@ export interface RecordedRequest {
   method: string;
   headers: Record<string, string>;
   body: Record<string, unknown> | undefined;
+  /** The raw body when it is not JSON, e.g. an upload to S3. */
+  bytes: Uint8Array | undefined;
 }
 
 export type Handler = (request: RecordedRequest) => Response | string | Record<string, unknown>;
@@ -20,7 +22,8 @@ export function fakeCloud(routes: Record<string, Handler | Handler[]>) {
     const path = url.origin === new URL(BASE).origin ? url.pathname.replace(/^\/api/, "") : url.href;
     const headers = Object.fromEntries(new Headers(init.headers).entries());
     const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
-    const request = { path, method: init.method ?? "GET", headers, body };
+    const bytes = init.body instanceof Uint8Array ? init.body : undefined;
+    const request = { path, method: init.method ?? "GET", headers, body, bytes };
     requests.push(request);
 
     let route = routes[path];

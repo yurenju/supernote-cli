@@ -11,9 +11,11 @@ Files ported from supernote-cloud carry a header naming the file they came
 from. Changes made in the port:
 
 - Rewritten from Python to TypeScript, with no runtime dependencies.
-- Read-only: only login, listing, walking and downloading are ported. The
-  commands that change Supernote Cloud (mkdir, put, rename, mv, cp, rm) are
-  left out.
+- The commands that change Supernote Cloud (put, mkdir, rename, mv, cp, rm)
+  take their target as the last argument and refuse instead of overwriting:
+  a taken name is an error, put --force replaces a file through a backup it
+  can restore, rm asks first and needs -r for a folder with contents, mkdir
+  gains -p, and items from different folders are handled one folder at a time.
 - The access token is read from the SUPERNOTE_TOKEN environment variable and
   is never written to disk. `login` prints the token instead of saving it.
 - File and folder ids are kept as strings, because they exceed the largest

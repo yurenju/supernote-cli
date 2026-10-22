@@ -129,15 +129,23 @@ function normalize(path: string): string {
   return `/${path.split("/").filter(Boolean).join("/")}`;
 }
 
-/** How to name an item in a message: its path when given one, else its name. */
-function display(item: string | CloudItem): string {
-  return typeof item === "string" ? normalize(item) : item.fileName;
+/** The id the endpoints expect for a folder: the root's is 0. */
+function folderId(id: string): string | number {
+  return id === ROOT.id ? 0 : id;
 }
 
-/** A display path for a name inside a folder given by path or item. */
-function childPath(folder: string | CloudItem, name: string): string {
-  const base = typeof folder === "string" ? normalize(folder) : folder.fileName;
-  return `${base.replace(/\/$/, "")}/${name}`;
+/** An item resolved from a path or given as is, and what to call it in messages. */
+interface Located {
+  item: CloudItem;
+  /** The normalized path, when the caller gave one. */
+  path: string | undefined;
+  /** The path if known, else the item's name. */
+  label: string;
+}
+
+/** True when path lies strictly inside folder. */
+function isInside(path: string, folder: string): boolean {
+  return path.startsWith(`${folder.replace(/\/$/, "")}/`);
 }
 
 function expectSuccess(data: BaseResponse, fallback: string): void {
@@ -341,7 +349,7 @@ export class SupernoteClient {
     const items: CloudItem[] = [];
     for (let pageNo = 1; ; pageNo++) {
       const data = await this.#call(endpoints.list, {
-        directoryId: dir.id === ROOT.id ? 0 : dir.id,
+        directoryId: folderId(dir.id),
         pageNo,
         pageSize: PAGE_SIZE,
         order: "time",
@@ -423,16 +431,24 @@ export class SupernoteClient {
 
   // --- writing -------------------------------------------------------------
 
-  async #folderItem(item: string | CloudItem): Promise<CloudItem> {
+  async #locate(item: string | CloudItem): Promise<Located> {
     this.#requireToken();
-    const folder = await this.#toItem(item);
-    if (!folder.isFolder) throw new FileFolderNotFound(`Not a folder: ${folder.fileName}`);
-    return folder;
+    const path = typeof item === "string" ? normalize(item) : undefined;
+    const resolved = await this.#toItem(item);
+    return { item: resolved, path, label: path ?? resolved.fileName };
   }
 
-  /** The id the write endpoints expect for a folder: the root is 0. */
-  #directoryId(folder: CloudItem): string | number {
-    return folder.id === ROOT.id ? 0 : folder.id;
+  async #locateFolder(item: string | CloudItem): Promise<Located> {
+    const located = await this.#locate(item);
+    if (!located.item.isFolder) throw new FileFolderNotFound(`Not a folder: ${located.label}`);
+    return located;
+  }
+
+  /** Locate an item that may be renamed, moved or deleted: anything but the root. */
+  async #locateBelowRoot(item: string | CloudItem): Promise<Located> {
+    const located = await this.#locate(item);
+    if (located.item.id === ROOT.id) throw new ApiError("The root folder cannot be changed");
+    return located;
   }
 
   /**
@@ -445,57 +461,45 @@ export class SupernoteClient {
     for (const localPath of localPaths) {
       if (!(await stat(localPath)).isFile()) throw new FileFolderNotFound(`Not a file: ${localPath}`);
     }
-    const target = await this.#folderItem(folder);
+    const target = await this.#locateFolder(folder);
     const names = localPaths.map((localPath) => basename(localPath));
     const repeated = names.find((name, i) => names.indexOf(name) !== i);
     if (repeated !== undefined) {
-      throw new FileFolderExists(`Two files would both become ${childPath(folder, repeated)}`);
+      throw new FileFolderExists(`Two files would both become ${posix.join(target.label, repeated)}`);
     }
 
-    const existing = new Map((await this.ls(target)).map((item) => [item.fileName, item]));
+    const existing = new Map((await this.ls(target.item)).map((item) => [item.fileName, item]));
     const replacing = new Map<string, CloudItem>();
     for (const name of names) {
       const item = existing.get(name);
       if (!item) continue;
-      if (!options.force || item.isFolder) throw new FileFolderExists(`Already exists: ${childPath(folder, name)}`);
+      if (!options.force || item.isFolder) {
+        throw new FileFolderExists(`Already exists: ${posix.join(target.label, name)}`);
+      }
       replacing.set(name, item);
     }
 
     for (const localPath of localPaths) {
       const old = replacing.get(basename(localPath));
       if (!old) {
-        await this.#upload(localPath, target);
+        await this.#upload(localPath, target.item);
         continue;
       }
       const backup = `${old.fileName}.bak-${Date.now()}`;
       await this.#rename(old, backup);
       try {
-        await this.#upload(localPath, target);
+        await this.#upload(localPath, target.item);
       } catch (error) {
         await this.#rename(old, old.fileName).catch(() => {
           throw new ApiError(`Upload of ${old.fileName} failed, and the old file is left as ${backup}`);
         });
         throw error;
       }
-      await this.#delete(target, [old]).catch((error: unknown) => {
+      await this.#perFolder(endpoints.delete, [old], {}, "Failed to delete").catch((error: unknown) => {
         throw new ApiError(`Uploaded ${old.fileName}, but could not delete the old copy ${backup}: ${String(error)}`);
       });
     }
     return names;
-  }
-
-  async #rename(item: CloudItem, newName: string): Promise<void> {
-    const data = await this.#call(endpoints.rename, { id: item.id, newName });
-    expectSuccess(data, `Failed to rename ${item.fileName}`);
-  }
-
-  /** Delete items that all sit in the given folder. */
-  async #delete(folder: CloudItem, items: CloudItem[]): Promise<void> {
-    const data = await this.#call(endpoints.delete, {
-      directoryId: this.#directoryId(folder),
-      idList: items.map((item) => item.id),
-    });
-    expectSuccess(data, "Failed to delete");
   }
 
   /**
@@ -517,7 +521,7 @@ export class SupernoteClient {
       if (found && (!found.isFolder || (last && !options.parents))) throw new FileFolderExists(`Already exists: ${here}`);
       if (!found) {
         if (!last && !options.parents) throw new FileFolderNotFound(`Not found: ${here}`);
-        const data = await this.#call(endpoints.mkdir, { directoryId: this.#directoryId(current), fileName: part });
+        const data = await this.#call(endpoints.mkdir, { directoryId: folderId(current.id), fileName: part });
         expectSuccess(data, `Failed to create ${here}`);
         found = (await this.ls(current)).find((item) => item.fileName === part && item.isFolder);
         if (!found) throw new ApiError(`Created ${here} but cannot find it`);
@@ -528,14 +532,13 @@ export class SupernoteClient {
 
   /** Rename a file or folder in place. */
   async rename(item: string | CloudItem, newName: string): Promise<void> {
-    this.#requireToken();
     if (newName.includes("/")) throw new ApiError(`A new name cannot contain a slash: ${newName}`);
-    const target = await this.#movable(item);
-    if ((await this.ls(this.#parentOf(target))).some((sibling) => sibling.fileName === newName)) {
-      const folder = typeof item === "string" ? posix.dirname(normalize(item)) : "";
-      throw new FileFolderExists(`Already exists: ${childPath(folder, newName)}`);
+    const target = await this.#locateBelowRoot(item);
+    const siblings = await this.ls({ ...ROOT, id: target.item.directoryId });
+    if (siblings.some((sibling) => sibling.fileName === newName)) {
+      throw new FileFolderExists(`Already exists: ${posix.join(posix.dirname(target.label), newName)}`);
     }
-    await this.#rename(target, newName);
+    await this.#rename(target.item, newName);
   }
 
   /** Move files and folders, from any folders, into one folder. */
@@ -550,22 +553,25 @@ export class SupernoteClient {
 
   /** Delete files and folders. A folder with contents needs recursive. */
   async rm(items: (string | CloudItem)[], options: { recursive?: boolean } = {}): Promise<void> {
-    this.#requireToken();
-    // Deleting a folder deletes what is inside it: drop paths below another one, and repeats
-    const paths = items.filter((item): item is string => typeof item === "string").map(normalize);
-    const wanted = items.filter(
-      (item) => typeof item !== "string" || !paths.some((path) => normalize(item).startsWith(`${path}/`)),
+    const located: Located[] = [];
+    for (const item of items) located.push(await this.#locateBelowRoot(item));
+    // Deleting a folder deletes what is inside it: drop repeats and paths below another one
+    const targets = located.filter(
+      ({ item, path }, i) =>
+        located.findIndex((other) => other.item.id === item.id) === i &&
+        !located.some((other) => path && other.path && isInside(path, other.path)),
     );
-    const targets: CloudItem[] = [];
-    for (const item of wanted) {
-      const target = await this.#movable(item);
-      if (targets.some((seen) => seen.id === target.id)) continue;
-      if (!options.recursive && target.isFolder && (await this.ls(target)).length > 0) {
-        throw new FolderNotEmpty(`Folder is not empty: ${display(item)}`);
+    for (const { item, label } of targets) {
+      if (!options.recursive && item.isFolder && (await this.ls(item)).length > 0) {
+        throw new FolderNotEmpty(`Folder is not empty: ${label}`);
       }
-      targets.push(target);
     }
-    for (const group of this.#byFolder(targets)) await this.#delete(this.#parentOf(group[0]!), group);
+    await this.#perFolder(
+      endpoints.delete,
+      targets.map(({ item }) => item),
+      {},
+      "Failed to delete",
+    );
   }
 
   async #transfer(
@@ -574,55 +580,51 @@ export class SupernoteClient {
     items: (string | CloudItem)[],
     folder: string | CloudItem,
   ): Promise<void> {
-    const target = await this.#folderItem(folder);
+    const target = await this.#locateFolder(folder);
     const sources: CloudItem[] = [];
-    for (const [i, item] of items.entries()) {
-      const source = await this.#movable(item);
-      const into = typeof folder === "string" ? normalize(folder) : undefined;
-      const from = display(item);
-      if (source.id === target.id || (into && typeof item === "string" && into.startsWith(`${from}/`))) {
-        throw new ApiError(`Cannot ${verb} ${from} into itself`);
+    for (const item of items) {
+      const { item: source, path, label } = await this.#locateBelowRoot(item);
+      if (source.id === target.item.id || (path && target.path && isInside(target.path, path))) {
+        throw new ApiError(`Cannot ${verb} ${label} into itself`);
       }
-      sources[i] = source;
+      sources.push(source);
     }
-    const taken = new Set((await this.ls(target)).map((item) => item.fileName));
+    const taken = new Set((await this.ls(target.item)).map((item) => item.fileName));
     for (const source of sources) {
-      if (taken.has(source.fileName)) throw new FileFolderExists(`Already exists: ${childPath(folder, source.fileName)}`);
+      if (taken.has(source.fileName)) {
+        throw new FileFolderExists(`Already exists: ${posix.join(target.label, source.fileName)}`);
+      }
       taken.add(source.fileName);
     }
-    for (const group of this.#byFolder(sources)) {
-      const data = await this.#call(endpoint, {
-        directoryId: this.#directoryId(this.#parentOf(group[0]!)),
-        goDirectoryId: this.#directoryId(target),
-        idList: group.map((item) => item.id),
-      });
-      expectSuccess(data, `Failed to ${verb}`);
-    }
+    await this.#perFolder(endpoint, sources, { goDirectoryId: folderId(target.item.id) }, `Failed to ${verb}`);
   }
 
-  /** Resolve an item that may be renamed, moved or deleted: anything but the root. */
-  async #movable(item: string | CloudItem): Promise<CloudItem> {
-    const resolved = await this.#toItem(item);
-    if (resolved.id === ROOT.id) throw new ApiError("The root folder cannot be changed");
-    return resolved;
+  async #rename(item: CloudItem, newName: string): Promise<void> {
+    const data = await this.#call(endpoints.rename, { id: item.id, newName });
+    expectSuccess(data, `Failed to rename ${item.fileName}`);
   }
 
-  /** The folder an item sits in, as far as the write endpoints need it: just its id. */
-  #parentOf(item: CloudItem): CloudItem {
-    return item.directoryId === ROOT.id ? ROOT : { ...ROOT, id: item.directoryId, fileName: "" };
-  }
-
-  /** Items grouped by the folder they sit in: the write endpoints take one folder per call. */
-  #byFolder(items: CloudItem[]): CloudItem[][] {
+  /**
+   * Call an endpoint that takes the folder its items sit in plus their ids, once per folder:
+   * items from different folders cannot share a call.
+   */
+  async #perFolder(endpoint: string, items: CloudItem[], extra: Record<string, unknown>, fallback: string): Promise<void> {
     const groups = new Map<string, CloudItem[]>();
     for (const item of items) groups.set(item.directoryId, [...(groups.get(item.directoryId) ?? []), item]);
-    return [...groups.values()];
+    for (const [directoryId, group] of groups) {
+      const data = await this.#call(endpoint, {
+        directoryId: folderId(directoryId),
+        ...extra,
+        idList: group.map((item) => item.id),
+      });
+      expectSuccess(data, fallback);
+    }
   }
 
   async #upload(localPath: string, folder: CloudItem): Promise<void> {
     const content = await readFile(localPath);
     const fileName = basename(localPath);
-    const directoryId = this.#directoryId(folder);
+    const directoryId = folderId(folder.id);
     const hash = md5(content);
 
     const apply = await this.#call(endpoints.uploadApply, { directoryId, fileName, md5: hash, size: content.length });

@@ -196,19 +196,18 @@ async function rename(args: string[]): Promise<void> {
   process.stdout.write(`Renamed ${path} to ${newName}\n`);
 }
 
-async function mv(args: string[]): Promise<void> {
-  const { positionals } = parseArgs({ args, allowPositionals: true });
-  const [paths, folder] = sourcesAndTarget("mv", positionals, "supernote mv /Note/a.note /Note/Archive");
-  await clientFromEnv().mv(paths, folder);
-  for (const path of paths) process.stdout.write(`Moved ${path} to ${folder}\n`);
+/** mv and cp: same arguments, same output, different client call. */
+function transfer(command: "mv" | "cp", done: string): (args: string[]) => Promise<void> {
+  return async (args) => {
+    const { positionals } = parseArgs({ args, allowPositionals: true });
+    const [paths, folder] = sourcesAndTarget(command, positionals, `supernote ${command} /Note/a.note /Note/Archive`);
+    await clientFromEnv()[command](paths, folder);
+    for (const path of paths) process.stdout.write(`${done} ${path} to ${folder}\n`);
+  };
 }
 
-async function cp(args: string[]): Promise<void> {
-  const { positionals } = parseArgs({ args, allowPositionals: true });
-  const [paths, folder] = sourcesAndTarget("cp", positionals, "supernote cp /Note/a.note /Note/Archive");
-  await clientFromEnv().cp(paths, folder);
-  for (const path of paths) process.stdout.write(`Copied ${path} to ${folder}\n`);
-}
+const mv = transfer("mv", "Moved");
+const cp = transfer("cp", "Copied");
 
 /** Deletion cannot be undone from here: ask on a terminal, demand --yes everywhere else. */
 async function rm(args: string[]): Promise<void> {

@@ -53,12 +53,16 @@ export function memoryCloud(seed: string[] = [], options: MemoryCloudOptions = {
   const enc = (text: string) => new TextEncoder().encode(text);
   for (const path of seed) ensure(path, path.endsWith("/"));
 
-  /** Every id must sit in the folder the request names, as the real API expects. */
-  const inFolder = (r: RecordedRequest) => {
-    const directoryId = String(r.body?.["directoryId"]);
-    const ids = (r.body?.["idList"] as string[]).map(String);
-    return ids.every((id) => nodes.get(id)?.directoryId === directoryId) ? ids : undefined;
-  };
+  /** A handler for an endpoint taking directoryId and idList: every id must sit in that folder, as the real API expects. */
+  const forItemsIn =
+    (apply: (ids: string[], r: RecordedRequest) => void): Handler =>
+    (r) => {
+      const directoryId = String(r.body?.["directoryId"]);
+      const ids = (r.body?.["idList"] as string[]).map(String);
+      if (!ids.every((id) => nodes.get(id)?.directoryId === directoryId)) return fail("items are not in directoryId");
+      apply(ids, r);
+      return { success: true };
+    };
   const remove = (id: string) => {
     for (const child of children(id)) remove(child.id);
     nodes.delete(id);
@@ -101,24 +105,15 @@ export function memoryCloud(seed: string[] = [], options: MemoryCloudOptions = {
       node.fileName = String(r.body?.["newName"]);
       return { success: true };
     },
-    "/file/move": (r) => {
-      const ids = inFolder(r);
-      if (!ids) return fail("items are not in directoryId");
+    "/file/move": forItemsIn((ids, r) => {
       for (const id of ids) nodes.get(id)!.directoryId = String(r.body?.["goDirectoryId"]);
-      return { success: true };
-    },
-    "/file/copy": (r) => {
-      const ids = inFolder(r);
-      if (!ids) return fail("items are not in directoryId");
+    }),
+    "/file/copy": forItemsIn((ids, r) => {
       for (const id of ids) copyInto(nodes.get(id)!, String(r.body?.["goDirectoryId"]));
-      return { success: true };
-    },
-    "/file/delete": (r) => {
-      const ids = inFolder(r);
-      if (!ids) return fail("items are not in directoryId");
+    }),
+    "/file/delete": forItemsIn((ids) => {
       for (const id of ids) remove(id);
-      return { success: true };
-    },
+    }),
   };
 
   const cloud = fakeCloud(routes);

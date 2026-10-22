@@ -1,8 +1,8 @@
 // Ported to TypeScript from rnbennett/supernote-cloud (supernote_cloud/api.py,
 // endpoints.py, models.py), Apache-2.0, original work © Julian Prester.
 // Modified by the supernote-cli authors: string ids, paginated listing, path
-// resolution by name, and guarded writes (no silent overwrite, grouping by
-// folder, recursive delete only on request). See NOTICE.
+// resolution by name, guarded writes (no silent overwrite, grouping by folder,
+// recursive delete only on request), and rendering a PDF's mark. See NOTICE.
 
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, posix } from "node:path";
@@ -17,6 +17,7 @@ import {
   IdentityVerificationRequired,
 } from "./errors.ts";
 import { extractRealKey, hashPassword, md5, sha256 } from "./hash.ts";
+import { extractHandwriting } from "./handwriting.ts";
 
 export const BASE_URL = "https://cloud.supernote.com/api";
 
@@ -36,6 +37,7 @@ const endpoints = {
   downloadUrl: "/file/download/url",
   noteToPdf: "/file/note/to/pdf",
   noteToPng: "/file/note/to/png",
+  pdfWithMarkToPdf: "/file/pdfwithmark/to/pdf",
   mkdir: "/file/folder/add",
   uploadApply: "/file/upload/apply",
   uploadFinish: "/file/upload/finish",
@@ -156,6 +158,10 @@ interface Located {
 /** True when path lies strictly inside folder. */
 function isInside(path: string, folder: string): boolean {
   return path.startsWith(`${folder.replace(/\/$/, "")}/`);
+}
+
+function isMark(file: CloudItem): boolean {
+  return /\.mark$/i.test(file.fileName);
 }
 
 function expectSuccess(data: BaseResponse, fallback: string): void {
@@ -409,9 +415,18 @@ export class SupernoteClient {
     return target;
   }
 
-  /** Have the server render a .note as PDF and download it. Empty pages means all pages. */
+  /**
+   * Have the server render a .note as PDF and download it. Empty pages means all pages.
+   * For a .mark, the PDF it annotates is rendered whole with the handwriting on top.
+   */
   async getPdf(item: string | CloudItem, outDir = ".", pages: number[] = []): Promise<string> {
     const file = await this.#fileItem(item);
+    if (isMark(file)) {
+      if (pages.length > 0) throw new ApiError("Supernote Cloud renders a .mark's whole PDF; pages cannot be chosen");
+      const target = join(outDir, `${file.fileName}.pdf`);
+      await writeFile(target, await this.#renderMarkedPdf(file));
+      return target;
+    }
     const data = await this.#call(endpoints.noteToPdf, { id: file.id, pageNoList: pages });
     expectSuccess(data, "Failed to convert note to PDF");
     const target = join(outDir, `${file.fileName.replace(/\.note$/i, "")}.pdf`);
@@ -419,9 +434,13 @@ export class SupernoteClient {
     return target;
   }
 
-  /** Have the server render a .note as one PNG per page and download them. Empty pages means all pages. */
+  /**
+   * Have the server render a .note as one PNG per page and download them. Empty pages means all pages.
+   * For a .mark, writes the handwriting alone (transparent background) of each page that has some.
+   */
   async getPng(item: string | CloudItem, outDir = ".", pages: number[] = []): Promise<string[]> {
     const file = await this.#fileItem(item);
+    if (isMark(file)) return this.#markPng(file, outDir, pages);
     const data = await this.#call(endpoints.noteToPng, { id: file.id });
     expectSuccess(data, "Failed to convert note to PNG");
     const list = (data["pngPageVOList"] as { pageNo: number; url: string }[] | undefined) ?? [];
@@ -437,6 +456,33 @@ export class SupernoteClient {
       written.push(target);
     }
     return written;
+  }
+
+  async #markPng(mark: CloudItem, outDir: string, pages: number[]): Promise<string[]> {
+    const inked = new Map(extractHandwriting(await this.#renderMarkedPdf(mark)).map((ink) => [ink.page, ink.png]));
+    const wanted = pages.length > 0 ? pages : [...inked.keys()];
+    const written: string[] = [];
+    for (const page of wanted) {
+      const png = inked.get(page);
+      if (!png) throw new ApiError(`Page ${page} of ${mark.fileName} has no handwriting`);
+      const target = join(outDir, `${mark.fileName}_${page}.png`);
+      await writeFile(target, png);
+      written.push(target);
+    }
+    return written;
+  }
+
+  /** The PDF a .mark annotates, rendered by the server with the handwriting on top. */
+  async #renderMarkedPdf(mark: CloudItem): Promise<Uint8Array> {
+    // a device keeps "<name>.mark" beside the "<name>" it annotates, and the cloud renders by the PDF's id
+    const pdfName = mark.fileName.replace(/\.mark$/i, "");
+    if (!/\.pdf$/i.test(pdfName)) throw new ApiError(`Only a PDF's mark can be rendered, not ${mark.fileName}`);
+    const folder = { ...ROOT, id: mark.directoryId };
+    const pdf = (await this.ls(folder)).find((item) => !item.isFolder && item.fileName === pdfName);
+    if (!pdf) throw new FileFolderNotFound(`${mark.fileName} has no ${pdfName} beside it to render`);
+    const data = await this.#call(endpoints.pdfWithMarkToPdf, { id: pdf.id });
+    expectSuccess(data, "Failed to render PDF with handwriting");
+    return this.#download(String(data["url"]));
   }
 
   // --- writing -------------------------------------------------------------

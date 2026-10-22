@@ -20,7 +20,7 @@ Commands:
   ls [path] [--json]            List a folder (default: root)
   walk [path]                   List every folder below path, recursively
   get <path> [-o dir] [--pdf | --png] [--pages 1,2]
-                                Download a file, or render a .note as PDF/PNG
+                                Download a file, or render a .note or .mark as PDF/PNG
   put <file>... <folder> [--force]
                                 Upload local files; --force replaces files of the same name
   mkdir <path> [-p]             Create a folder; -p also creates missing parents

@@ -66,6 +66,14 @@ export class FolderNotEmpty extends ApiError {
   }
 }
 
+/** The PDF Supernote Cloud rendered for a .mark is not shaped the way this tool can read handwriting from. */
+export class UnreadableMarkPdf extends ApiError {
+  constructor(detail: string) {
+    super(`Cannot read handwriting from the rendered PDF: ${detail}`);
+    this.name = "UnreadableMarkPdf";
+  }
+}
+
 /** Supernote Cloud refuses to store content it already has, in any folder or even deleted. */
 export class DuplicateContent extends ApiError {
   constructor(message: string) {

@@ -27,5 +27,8 @@ from. Changes made in the port:
 - Identity verification is signalled with an IdentityVerificationRequired
   error instead of an "__E1760__:<timestamp>" message string, and an expired
   or invalid token raises AccessTokenRejected.
+- `get --pdf` and `get --png` also accept the .mark a device keeps beside a
+  PDF: the cloud renders the PDF with its handwriting, and --png takes the
+  handwriting back out of that rendering as transparent PNGs.
 
 This project is not affiliated with or endorsed by Ratta or Supernote.

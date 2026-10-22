@@ -65,3 +65,11 @@ export class FolderNotEmpty extends ApiError {
     this.name = "FolderNotEmpty";
   }
 }
+
+/** Supernote Cloud refuses to store content it already has, in any folder or even deleted. */
+export class DuplicateContent extends ApiError {
+  constructor(message: string) {
+    super(message, "E0310");
+    this.name = "DuplicateContent";
+  }
+}

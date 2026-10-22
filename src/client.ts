@@ -10,6 +10,7 @@ import {
   AccessTokenRejected,
   ApiError,
   AuthenticationError,
+  DuplicateContent,
   FileFolderExists,
   FileFolderNotFound,
   FolderNotEmpty,
@@ -46,6 +47,8 @@ const endpoints = {
 
 /** Error codes meaning the access token is missing, expired or wrong. */
 const TOKEN_REJECTED_CODES = new Set(["E0401"]);
+/** Error code for an upload of content the cloud already stores somewhere. */
+const DUPLICATE_CONTENT_CODE = "E0310";
 /** Error codes meaning the emailed verification code expired. */
 const CODE_EXPIRED_CODES = new Set(["E1756", "E0101", "E1760"]);
 
@@ -71,6 +74,13 @@ export const ROOT: CloudItem = {
   createTime: new Date(0),
   updateTime: new Date(0),
 };
+
+/** What put did with one local file. */
+export interface PutResult {
+  name: string;
+  /** "unchanged": force was set and the cloud file already had the same content. */
+  outcome: "uploaded" | "replaced" | "unchanged";
+}
 
 export interface WalkEntry {
   path: string;
@@ -452,12 +462,12 @@ export class SupernoteClient {
   }
 
   /**
-   * Upload local files into a cloud folder, keeping their names. Returns the names uploaded.
-   * A name the folder already has is refused, unless force is set and it is a file: then the
-   * old file is renamed aside, the new one uploaded, and the old one deleted, or renamed back
-   * if the upload fails.
+   * Upload local files into a cloud folder, keeping their names.
+   * A name the folder already has is refused, unless force is set and it is a file: then a file
+   * with the same content is left alone, and otherwise the old file is renamed aside, the new
+   * one uploaded, and the old one deleted, or renamed back if the upload fails.
    */
-  async put(localPaths: string[], folder: string | CloudItem, options: { force?: boolean } = {}): Promise<string[]> {
+  async put(localPaths: string[], folder: string | CloudItem, options: { force?: boolean } = {}): Promise<PutResult[]> {
     for (const localPath of localPaths) {
       if (!(await stat(localPath)).isFile()) throw new FileFolderNotFound(`Not a file: ${localPath}`);
     }
@@ -479,16 +489,24 @@ export class SupernoteClient {
       replacing.set(name, item);
     }
 
+    const results: PutResult[] = [];
     for (const localPath of localPaths) {
-      const old = replacing.get(basename(localPath));
+      const name = basename(localPath);
+      const content = await readFile(localPath);
+      const old = replacing.get(name);
       if (!old) {
-        await this.#upload(localPath, target.item);
+        await this.#upload(name, content, target.item);
+        results.push({ name, outcome: "uploaded" });
+        continue;
+      }
+      if (old.md5 === md5(content)) {
+        results.push({ name, outcome: "unchanged" });
         continue;
       }
       const backup = `${old.fileName}.bak-${Date.now()}`;
       await this.#rename(old, backup);
       try {
-        await this.#upload(localPath, target.item);
+        await this.#upload(name, content, target.item);
       } catch (error) {
         await this.#rename(old, old.fileName).catch(() => {
           throw new ApiError(`Upload of ${old.fileName} failed, and the old file is left as ${backup}`);
@@ -498,8 +516,9 @@ export class SupernoteClient {
       await this.#perFolder(endpoints.delete, [old], {}, "Failed to delete").catch((error: unknown) => {
         throw new ApiError(`Uploaded ${old.fileName}, but could not delete the old copy ${backup}: ${String(error)}`);
       });
+      results.push({ name, outcome: "replaced" });
     }
-    return names;
+    return results;
   }
 
   /**
@@ -621,13 +640,18 @@ export class SupernoteClient {
     }
   }
 
-  async #upload(localPath: string, folder: CloudItem): Promise<void> {
-    const content = await readFile(localPath);
-    const fileName = basename(localPath);
+  async #upload(fileName: string, content: Uint8Array, folder: CloudItem): Promise<void> {
     const directoryId = folderId(folder.id);
     const hash = md5(content);
 
     const apply = await this.#call(endpoints.uploadApply, { directoryId, fileName, md5: hash, size: content.length });
+    if (apply.errorCode === DUPLICATE_CONTENT_CODE) {
+      throw new DuplicateContent(
+        `Supernote Cloud already has a file with the same content as ${fileName}, ` +
+          `perhaps in another folder or among deleted files, and stores each content only once. ` +
+          `To have it in another folder too, use \`supernote cp\`.`,
+      );
+    }
     expectSuccess(apply, `Failed to start upload of ${fileName}`);
     const url = String(apply["url"]);
     const response = await this.#fetch(url, {

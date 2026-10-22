@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SupernoteClient } from "../src/client.ts";
-import { ApiError, FileFolderExists, FileFolderNotFound, FolderNotEmpty } from "../src/errors.ts";
+import { ApiError, DuplicateContent, FileFolderExists, FileFolderNotFound, FolderNotEmpty } from "../src/errors.ts";
 import { BASE } from "./fake-cloud.ts";
 import { memoryCloud } from "./memory-cloud.ts";
 
@@ -201,4 +201,39 @@ test("rm deletes each item once, skipping items inside a folder it also deletes"
   const cloud = memoryCloud(["/A/b.note", "/C/d.note", "/keep.note"]);
   await client(cloud.fetch).rm(["/A", "/A/b.note", "/C/d.note", "/C/d.note"], { recursive: true });
   assert.deepEqual(cloud.paths(), ["/C/", "/keep.note"]);
+});
+
+test("put explains that the cloud refuses content it already has", async () => {
+  const cloud = memoryCloud(["/Note/a.note", "/Document/"]);
+  const files = await localFiles({ "copy.note": "/Note/a.note" });
+
+  await assert.rejects(client(cloud.fetch).put(files, "/Document"), (error) => {
+    assert.ok(error instanceof DuplicateContent);
+    assert.match(error.message, /copy\.note/);
+    assert.match(error.message, /supernote cp/);
+    return true;
+  });
+  assert.deepEqual(cloud.paths(), ["/Document/", "/Note/", "/Note/a.note"]);
+});
+
+test("put with force leaves a file whose content is unchanged alone", async () => {
+  const cloud = memoryCloud(["/Document/b.pdf"]);
+  const files = await localFiles({ "b.pdf": "/Document/b.pdf", "c.pdf": "NEW-C" });
+
+  const results = await client(cloud.fetch).put(files, "/Document", { force: true });
+
+  assert.deepEqual(results, [
+    { name: "b.pdf", outcome: "unchanged" },
+    { name: "c.pdf", outcome: "uploaded" },
+  ]);
+  assert.equal(cloud.calls("/file/rename").length, 0);
+  assert.deepEqual(cloud.paths(), ["/Document/", "/Document/b.pdf", "/Document/c.pdf"]);
+});
+
+test("put reports which files replaced an older one", async () => {
+  const cloud = memoryCloud(["/Document/b.pdf"]);
+  const files = await localFiles({ "b.pdf": "NEW-B" });
+  assert.deepEqual(await client(cloud.fetch).put(files, "/Document", { force: true }), [
+    { name: "b.pdf", outcome: "replaced" },
+  ]);
 });

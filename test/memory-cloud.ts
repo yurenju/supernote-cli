@@ -34,8 +34,11 @@ export function memoryCloud(seed: string[] = [], options: MemoryCloudOptions = {
     return `${parent ? pathOf(parent) : ""}/${node.fileName}`;
   };
   const find = (path: string) => [...nodes.values()].find((n) => pathOf(n) === path);
+  /** md5 of every file content ever stored. */
+  const stored = new Set<string>();
   const add = (directoryId: string, fileName: string, isFolder: boolean, content?: Uint8Array) => {
     const node = { id: String(nextId++), directoryId, fileName, isFolder, content };
+    if (content) stored.add(md5(content));
     nodes.set(node.id, node);
     return node;
   };
@@ -74,16 +77,21 @@ export function memoryCloud(seed: string[] = [], options: MemoryCloudOptions = {
 
   const routes: Record<string, Handler> = {
     "/file/list/query": (r) => {
-      const items = children(String(r.body?.["directoryId"])).map((n) =>
-        rawItem(n.id, n.fileName, n.isFolder, n.directoryId),
-      );
+      const items = children(String(r.body?.["directoryId"])).map((n) => ({
+        ...rawItem(n.id, n.fileName, n.isFolder, n.directoryId),
+        md5: n.content ? md5(n.content) : "",
+      }));
       return { success: true, total: items.length, userFileVOList: items };
     },
     "/file/folder/add": (r) => {
       add(String(r.body?.["directoryId"]), String(r.body?.["fileName"]), true);
       return { success: true };
     },
-    "/file/upload/apply": () => {
+    "/file/upload/apply": (r) => {
+      // The real cloud refuses content it has ever stored, in any folder, even after a delete
+      if (stored.has(String(r.body?.["md5"]))) {
+        return { success: false, errorCode: "E0310", errorMsg: "There are identical md5 files already. No need to upload!" };
+      }
       const innerName = `upload-${nextId++}`;
       const url = `https://s3.test/${innerName}`;
       routes[url] = (put) => {

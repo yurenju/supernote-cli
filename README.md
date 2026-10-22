@@ -158,7 +158,8 @@ The commands that change your cloud refuse rather than guess:
   an error when the target name is taken, before changing anything. Only
   `put --force` replaces a file: it renames the old one aside, uploads the new
   one, then deletes the old one, or renames it back if the upload fails. It
-  never replaces a folder.
+  never replaces a folder, and leaves a file whose content is already the
+  same alone.
 - The target of `put`, `mv` and `cp` is always the last argument and must be
   an existing folder; to change a name, use `rename`.
 - `put` uploads files only, not local folders. Supernote Cloud accepts any
@@ -166,6 +167,18 @@ The commands that change your cloud refuse rather than guess:
 - `rm` lists what it is about to delete and asks first. Run from a script or
   agent, with no terminal, it deletes only with `--yes`. A folder that still
   has contents needs `-r`.
+
+Supernote Cloud itself behaves in ways worth knowing before you script it:
+
+- **No folders at the top level.** Creating a folder directly under `/` is
+  refused; make yours inside `/Document`, `/Note` and so on.
+- **Taken names are renamed, not refused.** Uploading `a.pdf` or creating
+  `Inbox` where one already exists gives you `a(1).pdf` or `Inbox(1)`. That is
+  why this tool checks names itself before every write.
+- **Each content is stored only once.** An upload is refused when the cloud
+  already has a file with exactly the same bytes, in any folder, and even
+  after that file was deleted. To have the same file in a second folder, use
+  `cp`.
 
 ## Library
 
@@ -204,6 +217,14 @@ is a development convenience, not a place to keep your real token:
 
 ```bash
 node --env-file=.env.local src/cli.ts ls /
+```
+
+`--env-file` never overrides a variable that is already set. Inside a Docker
+Sandbox, `SUPERNOTE_TOKEN` already holds the sandbox's placeholder, so unset it
+first:
+
+```bash
+env -u SUPERNOTE_TOKEN node --env-file=.env.local src/cli.ts ls /
 ```
 
 ## License

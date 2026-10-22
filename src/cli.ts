@@ -169,8 +169,9 @@ function sourcesAndTarget(command: string, positionals: string[], example: strin
 async function put(args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { force: { type: "boolean" } } });
   const [files, folder] = sourcesAndTarget("put", positionals, "supernote put ./a.pdf /Document");
-  for (const name of await clientFromEnv().put(files, folder, { force: values.force })) {
-    process.stdout.write(`Uploaded ${name} to ${folder}\n`);
+  const said = { uploaded: "Uploaded", replaced: "Replaced", unchanged: "Unchanged, skipped" } as const;
+  for (const { name, outcome } of await clientFromEnv().put(files, folder, { force: values.force })) {
+    process.stdout.write(`${said[outcome]} ${name} in ${folder}\n`);
   }
 }
 

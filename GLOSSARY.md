@@ -15,3 +15,7 @@ _Avoid_: key, session, password
 **Identity verification**:
 The extra login step Supernote Cloud may demand for a device it has not seen before: a one-time code emailed to the account owner, valid for about two minutes. It always needs a human.
 _Avoid_: 2FA, OTP
+
+**Mark**:
+The handwriting a device adds on top of a PDF, kept as a separate `<name>.pdf.mark` file beside the PDF it annotates, which stays unchanged. Supernote Cloud can render the two together as one PDF.
+_Avoid_: annotation file, overlay

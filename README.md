@@ -2,8 +2,8 @@
 
 An unofficial command-line tool and TypeScript client for
 [Supernote Cloud](https://cloud.supernote.com). List your folders, walk the
-whole tree, download files or have the cloud render a `.note` notebook as PDF
-or PNG, and upload, move, copy, rename or delete files.
+whole tree, download files or have the cloud render a `.note` notebook (or the handwriting
+in a PDF's `.mark`) as PDF or PNG, and upload, move, copy, rename or delete files.
 
 > [!WARNING]
 > Supernote Cloud has no public API. This tool uses an undocumented API that
@@ -118,7 +118,7 @@ supernote login [--email <email>]       Log in and print an access token to stdo
 supernote ls [path] [--json]            List a folder (default: root)
 supernote walk [path]                   List every folder below path, recursively
 supernote get <path> [-o dir] [--pdf | --png] [--pages 1,2]
-                                        Download a file, or render a .note as PDF/PNG
+                                        Download a file, or render a .note or .mark as PDF/PNG
 supernote put <file>... <folder> [--force]
                                         Upload local files into a folder
 supernote mkdir <path> [-p]             Create a folder
@@ -136,10 +136,20 @@ supernote walk /Note
 supernote get /Note/Inbox/meeting.note -o ./downloads
 supernote get /Note/Inbox/meeting.note --pdf --pages 1,3
 supernote get /Note/Inbox/meeting.note --png          # meeting.note_1.png, meeting.note_2.png, …
+supernote get /Document/paper.pdf.mark --png          # paper.pdf.mark_3.png for each page with handwriting
+supernote get /Document/paper.pdf.mark --pdf          # paper.pdf.mark.pdf: the PDF with its handwriting
 ```
 
 `--pdf` and `--png` ask Supernote Cloud to render the notebook, so you don't
 need to parse `.note` files yourself.
+
+A `.mark` holds the handwriting you add to a PDF on the device, and sits beside
+that PDF (`paper.pdf.mark` next to `paper.pdf`). `--pdf` downloads the whole PDF
+as Supernote Cloud renders it with the handwriting on top; it cannot pick pages.
+`--png` takes the handwriting back out of that rendering: one PNG with a
+transparent background for each page that has handwriting, at the device's
+screen resolution, without the PDF underneath. `--pages` asking for a page
+without handwriting is an error.
 
 ```bash
 supernote put ./paper.pdf ./book.epub /Document

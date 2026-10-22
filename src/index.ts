@@ -9,5 +9,6 @@ export {
   FileFolderNotFound,
   FolderNotEmpty,
   IdentityVerificationRequired,
+  UnreadableMarkPdf,
 } from "./errors.ts";
 export { extractRealKey, hashPassword, md5, sha256 } from "./hash.ts";

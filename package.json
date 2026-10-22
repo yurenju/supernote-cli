@@ -1,7 +1,7 @@
 {
   "name": "supernote-cli",
   "version": "0.1.0",
-  "description": "Unofficial read-only CLI and TypeScript client for Supernote Cloud",
+  "description": "Unofficial CLI and TypeScript client for Supernote Cloud",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {

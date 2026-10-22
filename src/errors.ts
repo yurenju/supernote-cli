@@ -49,3 +49,27 @@ export class FileFolderNotFound extends ApiError {
     this.name = "FileFolderNotFound";
   }
 }
+
+/** A write would land on a name the target folder already has. */
+export class FileFolderExists extends ApiError {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileFolderExists";
+  }
+}
+
+/** Deleting a folder that still has contents, without asking for a recursive delete. */
+export class FolderNotEmpty extends ApiError {
+  constructor(message: string) {
+    super(message);
+    this.name = "FolderNotEmpty";
+  }
+}
+
+/** Supernote Cloud refuses to store content it already has, in any folder or even deleted. */
+export class DuplicateContent extends ApiError {
+  constructor(message: string) {
+    super(message, "E0310");
+    this.name = "DuplicateContent";
+  }
+}

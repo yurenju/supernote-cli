@@ -1,6 +1,6 @@
-# Supernote Cloud reader
+# Supernote Cloud client
 
-A read-only window onto the notebooks and files a Supernote device has synced to Supernote Cloud.
+A command-line way to browse, download, upload and organise the notebooks and files a Supernote device syncs through Supernote Cloud.
 
 ## Language
 

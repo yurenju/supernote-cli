@@ -16,6 +16,14 @@ export interface FixturePage {
   handwriting?: Bitmap;
   /** Write the Stamp's image /Length as an indirect object, as some writers do. */
   indirectLength?: boolean;
+  /**
+   * Write the SMask as a 1-bit CCITT Group 4 image with these bytes, as Supernote Cloud
+   * does for some pages, instead of 8-bit Flate. The bytes must encode the handwriting's
+   * alpha: black transparent, or opaque with `blackIs1`.
+   */
+  ccittMask?: { data: Uint8Array; blackIs1?: boolean };
+  /** A /Decode array for the SMask, such as "[1 0]" to invert it. */
+  maskDecode?: string;
 }
 
 const PAGE_W = 446.88;
@@ -47,10 +55,16 @@ export function buildPdf(pages: FixturePage[]): Uint8Array {
         rgb.set(rgba.subarray(i * 4, i * 4 + 3), i * 3);
         alpha[i] = rgba[i * 4 + 3]!;
       }
-      const smaskData = deflateSync(alpha);
+      const mask = page.ccittMask;
+      const blackIs1 = mask?.blackIs1 ? "/BlackIs1 true" : "";
+      const decode = page.maskDecode ? `/Decode${page.maskDecode}` : "";
       const smask = add({
-        dict: `/Type/XObject/Subtype/Image/Width ${width}/Height ${height}/BitsPerComponent 8/ColorSpace/DeviceGray/Filter/FlateDecode`,
-        data: smaskData,
+        dict:
+          `/Type/XObject/Subtype/Image/Width ${width}/Height ${height}/ColorSpace/DeviceGray${decode}` +
+          (mask
+            ? `/BitsPerComponent 1/Filter/CCITTFaxDecode/DecodeParms<</K -1/Columns ${width}${blackIs1}>>`
+            : "/BitsPerComponent 8/Filter/FlateDecode"),
+        data: mask ? mask.data : deflateSync(alpha),
       });
       const rgbData = deflateSync(rgb);
       let lengthRef = "";

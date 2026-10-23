@@ -6,6 +6,7 @@
 // as PNG; it is not a general PDF reader.
 
 import { deflateSync, inflateSync } from "node:zlib";
+import { decodeG4 } from "./ccitt.ts";
 import { UnreadableMarkPdf } from "./errors.ts";
 
 export interface HandwritingPage {
@@ -265,7 +266,10 @@ interface Samples {
   samples: Buffer;
 }
 
-/** Decodes an 8-bit, Flate-compressed image stream in the given colour space into raw samples. */
+/**
+ * Decodes an image stream in the given colour space into 8-bit samples. Images are
+ * 8-bit and Flate-compressed, except that a greyscale mask may also be 1-bit CCITT.
+ */
 function decodeSamples(pdf: PdfFile, ref: PdfValue | undefined, space: "DeviceRGB" | "DeviceGray"): Samples {
   const stream = pdf.streamData(ref);
   if (!stream) throw new UnreadableMarkPdf("handwriting image is not a stream");
@@ -273,18 +277,28 @@ function decodeSamples(pdf: PdfFile, ref: PdfValue | undefined, space: "DeviceRG
   const width = pdf.resolve(dict.get("Width"));
   const height = pdf.resolve(dict.get("Height"));
   if (typeof width !== "number" || typeof height !== "number") throw new UnreadableMarkPdf("image has no size");
-  if (pdf.resolve(dict.get("BitsPerComponent")) !== 8) throw new UnreadableMarkPdf("only 8-bit images are supported");
-
   if (!isName(pdf.resolve(dict.get("ColorSpace")), space)) throw new UnreadableMarkPdf(`expected a ${space} image`);
   const channels = space === "DeviceRGB" ? 3 : 1;
+  // A /Decode array other than the default [0 1 …] would remap the samples.
+  if (pdf.array(dict.get("Decode")).some((n, i) => pdf.resolve(n) !== i % 2)) {
+    throw new UnreadableMarkPdf("images with a /Decode array are not supported");
+  }
 
   const filter = pdf.resolve(dict.get("Filter"));
   const filters = Array.isArray(filter) ? filter.map((f) => pdf.resolve(f)) : filter === undefined ? [] : [filter];
+  const parms = pdf.resolve(dict.get("DecodeParms"));
+  const parm = (name: string) => (parms instanceof Map ? pdf.resolve(parms.get(name)) : undefined);
+  const bits = pdf.resolve(dict.get("BitsPerComponent"));
+  if (space === "DeviceGray" && filters.length === 1 && isName(filters[0], "CCITTFaxDecode")) {
+    if (bits !== 1) throw new UnreadableMarkPdf("CCITT images must be 1-bit");
+    return { dict, width, height, samples: decodeCcitt(data, width, height, parm) };
+  }
+
+  if (bits !== 8) throw new UnreadableMarkPdf("only 8-bit images are supported");
   if (filters.length !== 1 || !isName(filters[0], "FlateDecode")) {
     throw new UnreadableMarkPdf("only Flate-compressed images are supported");
   }
-  const parms = pdf.resolve(dict.get("DecodeParms"));
-  const predictor = parms instanceof Map ? pdf.resolve(parms.get("Predictor")) : undefined;
+  const predictor = parm("Predictor");
   if (Array.isArray(parms) || (predictor !== undefined && predictor !== 1)) {
     throw new UnreadableMarkPdf("image predictors are not supported");
   }
@@ -292,6 +306,24 @@ function decodeSamples(pdf: PdfFile, ref: PdfValue | undefined, space: "DeviceRG
   const samples = inflateSync(data);
   if (samples.length < width * height * channels) throw new UnreadableMarkPdf("image data is truncated");
   return { dict, width, height, samples };
+}
+
+/** Decodes a 1-bit CCITT Group 4 greyscale image into 8-bit samples, 0 or 255. */
+function decodeCcitt(
+  data: Uint8Array,
+  width: number,
+  height: number,
+  parm: (name: string) => PdfValue | undefined,
+): Buffer {
+  const k = parm("K") ?? 0;
+  if (typeof k !== "number" || k >= 0) throw new UnreadableMarkPdf("only CCITT Group 4 images are supported");
+  if ((parm("Columns") ?? 1728) !== width) throw new UnreadableMarkPdf("CCITT image width does not match the image");
+  if (parm("EncodedByteAlign") === true) throw new UnreadableMarkPdf("byte-aligned CCITT images are not supported");
+
+  // Black pixels are sample 0 unless BlackIs1, so on a mask they are transparent.
+  const blackSample = parm("BlackIs1") === true ? 255 : 0;
+  const pixels = decodeG4(data, width, height);
+  return Buffer.from(pixels.map((pixel) => (pixel === 1 ? blackSample : 255 - blackSample)));
 }
 
 /** The handwriting image: RGB colour with an SMask for its transparency. */
